@@ -1,0 +1,75 @@
+# Render Blueprint — one-click deploy of the full test stack (Postgres +
+# backend + frontend) to Render's free tier.
+#
+# This is a TEST/DEMO deployment, not a production one:
+#   - DEV_APPROVE_SAMPLE_CONTENT=true activates the seeded SAMPLE screening
+#     rule/protocols/consent template so the workflow is walkable without
+#     waiting on real clinic-approved content. Never leave this on for real
+#     patient use.
+#   - All seeded accounts/data are synthetic (see phoenix-iv-platform's
+#     prisma/seed.ts) — nothing here is a real patient.
+#   - CORS_ORIGIN is left open ("true" = reflect any origin) because the
+#     frontend's public URL isn't known until after deploy. Before any real
+#     use, pin this to the frontend's actual origin.
+#   - The frontend container runs Vite's *dev* server, not an optimized
+#     production build — fine for testing, not for real traffic.
+#   - Render's free Postgres database expires 30 days after creation. Fine
+#     for testing; not for anything you need to keep.
+#
+# To deploy: push this repo to GitHub, then in Render: New -> Blueprint,
+# point it at the repo, and click Apply.
+
+databases:
+  - name: phoenix-iv-db
+    plan: free
+    databaseName: phoenix_iv_dev
+    user: phoenix
+
+services:
+  - type: web
+    name: phoenix-iv-backend
+    runtime: docker
+    plan: free
+    dockerfilePath: ./phoenix-iv-platform/Dockerfile
+    dockerContext: ./phoenix-iv-platform
+    envVars:
+      - key: NODE_ENV
+        value: development
+      - key: DATABASE_URL
+        fromDatabase:
+          name: phoenix-iv-db
+          property: connectionString
+      - key: JWT_ACCESS_SECRET
+        generateValue: true
+      - key: JWT_ACCESS_TTL
+        value: 15m
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_TTL
+        value: 12h
+      - key: STAFF_IDLE_TIMEOUT_SECONDS
+        value: "900"
+      - key: PATIENT_IDLE_TIMEOUT_SECONDS
+        value: "300"
+      - key: MFA_ISSUER
+        value: "Phoenix Medical Aesthetics (DEMO)"
+      - key: DEV_APPROVE_SAMPLE_CONTENT
+        value: "true"
+      # CORS_ORIGIN is deliberately NOT set here: main.ts falls back to
+      # `true` (reflect any request origin) when it's unset, which is what
+      # we want for this test deployment since the frontend's URL isn't
+      # known until after it deploys. Before any real use, set this to the
+      # frontend's actual origin and redeploy.
+
+  - type: web
+    name: phoenix-iv-frontend
+    runtime: docker
+    plan: free
+    dockerfilePath: ./phoenix-iv-frontend/Dockerfile
+    dockerContext: ./phoenix-iv-frontend
+    envVars:
+      - key: VITE_API_PROXY_TARGET
+        fromService:
+          name: phoenix-iv-backend
+          type: web
+          property: hostport
