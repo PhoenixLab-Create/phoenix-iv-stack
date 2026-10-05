@@ -1,0 +1,733 @@
+// Phoenix IV Therapy Documentation Platform — data model
+//
+// Conventions (see architecture review, Section 3):
+//  - UUID primary keys
+//  - All timestamps are timestamptz, stored UTC
+//  - event_time (when it clinically happened) vs recorded_at (when entered) are kept
+//    separate wherever late entries are plausible
+//  - Soft delete only for clinical data (deleted_at); hard delete is never exposed
+//  - Signed visits are immutable at the DB grant level (see infra/sql/immutability.sql)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Identity & access (Sprint 1)
+// ─────────────────────────────────────────────────────────────────────────
+
+enum RoleName {
+  PATIENT_SESSION // not a real account; included for completeness of the enum
+  NURSE_CLINICIAN
+  PRESCRIBER
+  ADMIN
+  SYSTEM_ADMIN
+  MEDICAL_DIRECTOR
+}
+
+model User {
+  id                     String   @id @default(uuid())
+  firstName              String
+  lastName               String
+  email                  String   @unique
+  professionalDesignation String?  // e.g. "RN", "NP" — null for front-desk/admin
+  collegeRegistrationNo  String?  // CNO / CPSO registration number, where applicable
+  passwordHash           String
+  mfaEnrolled            Boolean  @default(false)
+  mfaSecretEncrypted     String?  // TOTP secret, encrypted at rest via KMS-backed field encryption
+  status                 String   @default("active") // active | suspended | deactivated
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  roles       UserRole[]
+  sessions    Session[]
+  assignedVisits Visit[] @relation("AssignedClinician")
+
+  @@map("users")
+}
+
+model Role {
+  id          String   @id @default(uuid())
+  name        RoleName @unique
+  description String?
+
+  users       UserRole[]
+  permissions RolePermission[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id     String @id @default(uuid())
+  key    String @unique // e.g. "visit.sign", "record.view.clinical", "settings.manage"
+  label  String
+
+  roles  RolePermission[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId       String
+  permissionId String
+
+  role       Role       @relation(fields: [roleId], references: [id])
+  permission Permission @relation(fields: [permissionId], references: [id])
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model UserRole {
+  userId String
+  roleId String
+
+  user User @relation(fields: [userId], references: [id])
+  role Role @relation(fields: [roleId], references: [id])
+
+  @@id([userId, roleId])
+  @@map("user_roles")
+}
+
+enum SessionKind {
+  STAFF
+  PATIENT
+}
+
+model Session {
+  id        String      @id @default(uuid())
+  kind      SessionKind
+  userId    String?     // null for patient sessions
+  visitId   String?     // set for patient sessions (single-visit, time-limited)
+  issuedAt  DateTime    @default(now())
+  expiresAt DateTime
+  ip        String?
+  deviceId  String?
+  revokedAt DateTime?
+
+  user  User?  @relation(fields: [userId], references: [id])
+  visit Visit? @relation(fields: [visitId], references: [id])
+
+  @@map("sessions")
+}
+
+// Clinic-tunable configuration — NOT a place for clinical rules/doses.
+// admin_clinical_visibility is the flag requested in the architecture review.
+model SystemSetting {
+  key         String   @id
+  value       Json
+  updatedBy   String
+  updatedAt   DateTime @updatedAt
+
+  @@map("system_settings")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Patient & visit core (Sprint 2)
+// ─────────────────────────────────────────────────────────────────────────
+
+model Patient {
+  id                     String   @id @default(uuid())
+  firstName              String
+  lastName               String
+  dateOfBirth            DateTime @db.Date
+  address                String?
+  phone                  String?
+  email                  String?
+  verifiedIdentityMethod String?  // e.g. "photo ID + DOB match" — clinic policy, not invented here
+  createdBy              String
+  createdAt              DateTime @default(now())
+  deletedAt              DateTime? // soft delete only
+
+  contacts Patient_Contact[]
+  visits   Visit[]
+
+  @@map("patients")
+}
+
+enum ContactType {
+  EMERGENCY
+  SUBSTITUTE_DECISION_MAKER
+}
+
+model Patient_Contact {
+  id           String      @id @default(uuid())
+  patientId    String
+  name         String
+  phone        String
+  relationship String?
+  type         ContactType
+
+  patient Patient @relation(fields: [patientId], references: [id])
+
+  @@map("patient_contacts")
+}
+
+enum VisitStatus {
+  REGISTERED
+  INTAKE
+  SAFETY_SCREENING
+  CLINICIAN_ASSESSMENT
+  ORDER_AUTHORIZATION
+  PROTOCOL_SELECTED
+  CONSENT
+  IV_PREPARATION
+  IV_INSERTION
+  INFUSION_MONITORING
+  ADVERSE_EVENT
+  TREATMENT_COMPLETION
+  PENDING_SIGNOFF
+  SIGNED
+  NOT_PROCEEDING
+  CANCELLED
+}
+
+model Visit {
+  id                    String      @id @default(uuid())
+  patientId             String
+  status                VisitStatus @default(REGISTERED)
+  assignedClinicianId   String?
+  startedAt             DateTime    @default(now())
+  signedAt              DateTime?   // non-null ⇒ immutable (enforced at DB grant + app layer)
+  outcome               String?     // treated | not_proceeding | cancelled
+  cancelReason          String?
+
+  patient            Patient @relation(fields: [patientId], references: [id])
+  assignedClinician  User?   @relation("AssignedClinician", fields: [assignedClinicianId], references: [id])
+  sessions           Session[]
+  statusHistory      VisitStatusHistory[]
+
+  // Sprint 3 modules
+  intake             IntakeForm?
+  vitalSets          VitalSet[]
+  screeningFlags     ScreeningFlag[]
+  assessment         Assessment?
+  order              Order?
+  protocolSelection  VisitProtocolSelection?
+  consent            Consent?
+  signoff            Signoff?
+
+  // Sprint 4 modules
+  preparation        VisitPreparation?
+  ivInsertion         IVInsertion?
+  monitoringEntries   InfusionMonitoringEntry[]
+  adverseEvents       AdverseEvent[]
+  completion          TreatmentCompletion?
+
+  // Sprint 5 modules
+  recordSnapshots     RecordSnapshot[]
+  amendments          Amendment[]
+
+  @@map("visits")
+}
+
+// Every transition is recorded here in addition to the audit log, so the
+// visit's clinical timeline can be reconstructed without joining the audit
+// schema (which is intentionally separate — see AuditEntry below).
+model VisitStatusHistory {
+  id        String      @id @default(uuid())
+  visitId   String
+  fromStatus VisitStatus?
+  toStatus  VisitStatus
+  changedBy String
+  changedAt DateTime    @default(now())
+  reason    String?
+
+  visit Visit @relation(fields: [visitId], references: [id])
+
+  @@map("visit_status_history")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Sprint 3 — Intake, screening rule engine, assessment, orders, protocol
+// selection, consent e-sign. All clinical content (rule wording, protocol
+// names/doses, consent text) is clinic-authored config data, never a
+// hardcoded value in this schema or in application code.
+// ─────────────────────────────────────────────────────────────────────────
+
+// A versioned definition of the intake questionnaire itself (which questions
+// exist, in what order, what type each is). Editing this creates a new
+// version rather than mutating history, so an already-submitted intake's
+// answers stay interpretable against the version they were answered under.
+model FormVersion {
+  id        String   @id @default(uuid())
+  kind      String   // "intake" (only kind in Sprint 3; room for others later)
+  version   Int
+  schema    Json     // question definitions: [{key, label, type, options?}, ...]
+  createdBy String
+  createdAt DateTime @default(now())
+  active    Boolean  @default(false)
+
+  intakeForms IntakeForm[]
+
+  @@unique([kind, version])
+  @@map("form_versions")
+}
+
+model IntakeForm {
+  visitId           String   @id
+  formVersionId      String
+  submittedAt        DateTime?
+  submittedByKind    String   // "patient" | "staff_on_behalf" — PRD assumes patient, staff-assisted is a real fallback
+  createdAt          DateTime @default(now())
+
+  visit       Visit       @relation(fields: [visitId], references: [id])
+  formVersion FormVersion @relation(fields: [formVersionId], references: [id])
+  answers     IntakeAnswer[]
+  medications IntakeMedication[]
+  allergies   IntakeAllergy[]
+
+  @@map("intake_forms")
+}
+
+// One row per question, keyed by the question's `key` in the FormVersion
+// schema. Using EAV-style rows rather than fixed columns means a clinic
+// wanting to add a question later doesn't need a migration — just a new
+// FormVersion.
+model IntakeAnswer {
+  id           String @id @default(uuid())
+  intakeId     String
+  questionKey  String
+  answerValue  Json   // boolean, string, or structured — shape depends on the question's `type`
+
+  intake IntakeForm @relation(fields: [intakeId], references: [visitId])
+
+  @@unique([intakeId, questionKey])
+  @@map("intake_answers")
+}
+
+model IntakeMedication {
+  id        String @id @default(uuid())
+  intakeId  String
+  name      String
+  dose      String?
+  frequency String?
+
+  intake IntakeForm @relation(fields: [intakeId], references: [visitId])
+
+  @@map("intake_medications")
+}
+
+model IntakeAllergy {
+  id          String  @id @default(uuid())
+  intakeId    String
+  hasAllergy  Boolean
+  description String?
+
+  intake IntakeForm @relation(fields: [intakeId], references: [visitId])
+
+  @@map("intake_allergies")
+}
+
+enum VitalPhase {
+  BASELINE
+  MONITORING
+  FINAL
+}
+
+model VitalSet {
+  id         String     @id @default(uuid())
+  visitId    String
+  phase      VitalPhase
+  eventTime  DateTime   @default(now())
+  bpSystolic Int?
+  bpDiastolic Int?
+  heartRate  Int?
+  respRate   Int?
+  temperature Float?
+  spo2       Int?
+  recordedBy String
+
+  visit            Visit                     @relation(fields: [visitId], references: [id])
+  monitoringEntries InfusionMonitoringEntry[] @relation("MonitoringEntryVitals")
+
+  @@map("vital_sets")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Screening (schema unchanged from earlier sprint; rule engine logic lands
+// in src/screening as of Sprint 3)
+// ─────────────────────────────────────────────────────────────────────────
+
+model ScreeningRule {
+  id        String   @id @default(uuid())
+  version   Int
+  expression Json    // clinic-authored rule, not invented by this software
+  message   String
+  authoredBy String
+  approvedBy String?
+  approvedAt DateTime?
+  active    Boolean  @default(false)
+
+  flags ScreeningFlag[]
+
+  @@map("screening_rules")
+}
+
+model ScreeningFlag {
+  id             String    @id @default(uuid())
+  visitId        String
+  ruleId         String
+  ruleVersion    Int
+  raisedAt       DateTime  @default(now())
+  acknowledgedBy String?
+  acknowledgedAt DateTime?
+  clinicianResponse String?
+
+  visit Visit         @relation(fields: [visitId], references: [id])
+  rule  ScreeningRule  @relation(fields: [ruleId], references: [id])
+
+  @@map("screening_flags")
+}
+
+model Assessment {
+  visitId       String   @id
+  reasonForVisit String
+  notes         String?
+  decision      String?  // "Proceed" | "Do not proceed"
+  decidedBy     String?
+  decidedAt     DateTime?
+
+  visit Visit @relation(fields: [visitId], references: [id])
+
+  @@map("assessments")
+}
+
+model Order {
+  visitId         String   @id
+  orderType       String   // "directive" | "patient_specific"
+  directiveRefId  String?
+  prescriberName  String?
+  prescriberCollegeNo String?
+  orderDetails    String?
+  orderedAt       DateTime @default(now())
+
+  visit Visit @relation(fields: [visitId], references: [id])
+
+  @@map("orders")
+}
+
+// Clinic-approved protocol catalog — names, descriptions and doses are
+// clinic-authored config (Medical Director approved), never generated by
+// this software. "Custom / Other Prescribed Infusion" is represented as
+// isCustom=true with no ingredient list here; the actual ingredients for a
+// custom infusion come from the Order.orderDetails typed from the
+// prescriber's order, not from this table.
+model Protocol {
+  id          String   @id @default(uuid())
+  version     Int
+  name        String
+  description String?
+  isCustom    Boolean  @default(false)
+  approvedBy  String?
+  approvedAt  DateTime?
+  active      Boolean  @default(false)
+
+  selections VisitProtocolSelection[]
+
+  @@map("protocols")
+}
+
+model VisitProtocolSelection {
+  visitId        String   @id
+  protocolId     String
+  customDetails  String?  // only meaningful when the selected protocol isCustom
+  selectedBy     String
+  selectedAt     DateTime @default(now())
+
+  visit    Visit    @relation(fields: [visitId], references: [id])
+  protocol Protocol @relation(fields: [protocolId], references: [id])
+
+  @@map("visit_protocol_selections")
+}
+
+model ConsentTemplate {
+  id            String    @id @default(uuid())
+  version       Int
+  body          String
+  approvedBy    String
+  effectiveFrom DateTime
+
+  consents Consent[]
+
+  @@map("consent_templates")
+}
+
+model Consent {
+  visitId              String   @id
+  templateVersionId    String
+  renderedTextSnapshot String
+  patientName          String
+  signatureBlobRef      String?
+  signedAt             DateTime?
+  witnessUserId         String?
+  questionsAnsweredConfirmed Boolean @default(false)
+
+  visit    Visit           @relation(fields: [visitId], references: [id])
+  template ConsentTemplate @relation(fields: [templateVersionId], references: [id])
+
+  @@map("consents")
+}
+
+model Signoff {
+  visitId      String   @id
+  signerId     String
+  designation  String
+  signatureBlobRef String
+  signedAt     DateTime @default(now())
+  recordHash   String
+
+  visit Visit @relation(fields: [visitId], references: [id])
+
+  @@map("signoffs")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Sprint 5 — sign-off completeness, amendments, record snapshots.
+//
+// A signed visit's clinical child rows are immutable (DB trigger — see
+// infra/sql/immutability.sql). A correction after signing is NEVER an
+// UPDATE to that row (the trigger would reject it anyway); it is an
+// Amendment row describing old value → new value → reason → who → when,
+// re-signed by the amending clinician. The "current" view of a record is
+// computed by overlaying amendments on top of the original signed data at
+// render time (see src/record) — the original is never touched or hidden.
+// ─────────────────────────────────────────────────────────────────────────
+
+model RecordSnapshot {
+  id            String   @id @default(uuid())
+  visitId       String
+  versionNo     Int
+  canonicalJson Json
+  hash          String
+  createdAt     DateTime @default(now())
+  createdBy     String
+
+  visit Visit @relation(fields: [visitId], references: [id])
+
+  @@unique([visitId, versionNo])
+  @@map("record_snapshots")
+}
+
+model Amendment {
+  id                     String    @id @default(uuid())
+  visitId                String
+  targetTable            String    // e.g. "assessments", "adverse_events" — whitelisted in AmendmentService
+  targetId               String    // usually the visitId itself; a row's own id for multi-row tables (e.g. adverse_events)
+  field                  String
+  oldValue               String
+  newValue               String
+  reason                 String
+  amendedBy              String
+  amendedAt              DateTime  @default(now())
+  signatureBlobRef       String
+  resultingSnapshotVersion Int
+
+  visit    Visit               @relation(fields: [visitId], references: [id])
+  approvals AmendmentApproval[]
+
+  @@map("amendments")
+}
+
+// Approval is its own insert-only row rather than a mutable field on
+// Amendment, so the amendments table itself never needs an UPDATE grant —
+// consistent with "the correction mechanism is itself never correctable by
+// a plain UPDATE" (see infra/sql/immutability.sql).
+model AmendmentApproval {
+  id          String   @id @default(uuid())
+  amendmentId String
+  approverId  String
+  decision    String   // "approved" | "rejected"
+  note        String?
+  approvedAt  DateTime @default(now())
+
+  amendment Amendment @relation(fields: [amendmentId], references: [id])
+
+  @@map("amendment_approvals")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Sprint 4 — IV preparation, insertion, infusion monitoring, adverse
+// events, treatment completion. As with protocols, base solutions and
+// ingredients are a clinic-configured catalog with no doses baked into
+// code — doses are entered per-prep from configuration or from a typed
+// prescriber order, never generated.
+// ─────────────────────────────────────────────────────────────────────────
+
+enum ProductKind {
+  BASE_SOLUTION
+  INGREDIENT
+}
+
+model Product {
+  id     String      @id @default(uuid())
+  kind   ProductKind
+  name   String
+  active Boolean     @default(false)
+
+  lots      ProductLot[]
+  prepItems VisitPrepItem[]
+  preparationsAsBase VisitPreparation[] @relation("BaseProduct")
+
+  @@map("products")
+}
+
+model ProductLot {
+  id          String   @id @default(uuid())
+  productId   String
+  lotNumber   String
+  expiryDate  DateTime @db.Date
+  receivedAt  DateTime @default(now())
+
+  product   Product         @relation(fields: [productId], references: [id])
+  prepItems VisitPrepItem[]
+
+  @@unique([productId, lotNumber])
+  @@map("product_lots")
+}
+
+model VisitPreparation {
+  visitId      String   @id
+  baseProductId String
+  baseVolumeMl Float
+  preparedBy   String
+  preparedAt   DateTime @default(now())
+
+  visit       Visit           @relation(fields: [visitId], references: [id])
+  baseProduct Product         @relation("BaseProduct", fields: [baseProductId], references: [id])
+  items       VisitPrepItem[]
+
+  @@map("visit_preparations")
+}
+
+model VisitPrepItem {
+  id            String   @id @default(uuid())
+  prepId        String
+  productId     String
+  doseValue     Float
+  doseUnit      String
+  lotId         String
+  isAdditional  Boolean  @default(false)
+  addedReason   String?
+
+  preparation VisitPreparation @relation(fields: [prepId], references: [visitId])
+  product     Product          @relation(fields: [productId], references: [id])
+  lot         ProductLot       @relation(fields: [lotId], references: [id])
+
+  @@map("visit_prep_items")
+}
+
+model IVInsertion {
+  visitId       String   @id
+  eventTime     DateTime @default(now())
+  site          String
+  side          String   // "left" | "right"
+  gauge         String
+  attempts      Int
+  successful    Boolean
+  insertedBy    String
+  siteCondition String?
+  note          String?
+
+  visit Visit @relation(fields: [visitId], references: [id])
+
+  @@map("iv_insertions")
+}
+
+model InfusionMonitoringEntry {
+  id                  String   @id @default(uuid())
+  visitId             String
+  eventTime           DateTime @default(now())
+  vitalSetId           String?
+  symptomsObservation  String?
+  tolerating           Boolean
+  recordedBy           String
+
+  visit    Visit     @relation(fields: [visitId], references: [id])
+  // Added so a client can display the vitals taken at each monitoring
+  // entry instead of just an opaque id (Sprint 7 frontend work) — requires
+  // a migration (`prisma migrate dev`) before this schema change is live.
+  vitalSet VitalSet? @relation("MonitoringEntryVitals", fields: [vitalSetId], references: [id])
+
+  @@map("infusion_monitoring_entries")
+}
+
+// Not one-to-one with Visit: a visit can have an adverse event, resume
+// monitoring, and (rarely) have a second event — each is its own row,
+// never overwritten.
+model AdverseEvent {
+  id                 String    @id @default(uuid())
+  visitId            String
+  onsetTime          DateTime
+  signsSymptoms      String
+  infusionAction     String    // stopped | modified | continued
+  vitalSetId          String?
+  interventions      String?
+  medicationGiven    String?
+  prescriberContacted String?
+  prescriberContactedAt DateTime?
+  emsContacted        Boolean  @default(false)
+  emsContactedAt      DateTime?
+  patientResponse     String?
+  outcome             String?
+  hospitalTransfer    Boolean  @default(false)
+  recordedBy          String
+  recordedAt          DateTime @default(now())
+
+  visit Visit @relation(fields: [visitId], references: [id])
+
+  @@map("adverse_events")
+}
+
+model TreatmentCompletion {
+  visitId              String   @id
+  endTime              DateTime @default(now())
+  totalInfusedMl        Float?
+  patientCondition      String?
+  catheterRemoved       Boolean?
+  catheterIntact        Boolean?
+  siteCondition         String?
+  dressingApplied       Boolean?
+  adverseEventOccurred  Boolean  @default(false)
+  aftercareProvided     Boolean  @default(false)
+  aftercareTemplateVersion String?
+  recordedBy            String
+
+  visit Visit @relation(fields: [visitId], references: [id])
+
+  @@map("treatment_completions")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Audit trail — separate, insert-only. See src/common/audit.
+// ─────────────────────────────────────────────────────────────────────────
+
+model AuditEntry {
+  id         String   @id @default(uuid())
+  occurredAt DateTime @default(now())
+  actorId    String?
+  actorRole  String?
+  action     String
+  entityType String
+  entityId   String?
+  patientId  String?
+  visitId    String?
+  before     Json?
+  after      Json?
+  reason     String?
+  ip         String?
+  deviceId   String?
+  requestId  String?
+  prevHash   String?
+  hash       String
+
+  @@map("audit_log")
+  @@index([patientId])
+  @@index([visitId])
+  @@index([occurredAt])
+}

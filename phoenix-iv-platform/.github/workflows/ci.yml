@@ -1,0 +1,119 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  lint-test-build:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: phoenix
+          POSTGRES_PASSWORD: phoenix_ci_only
+          POSTGRES_DB: phoenix_iv_ci
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: "postgresql://phoenix:phoenix_ci_only@localhost:5432/phoenix_iv_ci?schema=public"
+      JWT_ACCESS_SECRET: "ci-only-secret"
+      JWT_REFRESH_SECRET: "ci-only-secret-2"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Prisma migrate (CI database — synthetic schema only, no real data ever touches CI)
+        run: npx prisma migrate deploy
+
+      - name: Seed synthetic test fixtures
+        run: npx ts-node prisma/seed.ts
+
+      - name: Unit + integration tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      # Dependency vulnerability scan — required before merge per security architecture.
+      - name: npm audit
+        run: npm audit --audit-level=high
+
+  terraform-plan:
+    runs-on: ubuntu-latest
+    needs: lint-test-build
+    # Plan-only in CI. `terraform apply` is a manual, approved step run by a
+    # human with production credentials — never automatic from a PR pipeline
+    # for a system holding PHI.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - name: Terraform init
+        working-directory: infra
+        run: terraform init -backend=false
+      - name: Terraform validate
+        working-directory: infra
+        run: terraform validate
+
+  backup-restore-drill:
+    runs-on: ubuntu-latest
+    needs: lint-test-build
+    # Proves a dump of a (synthetic) database can actually be restored and
+    # read back correctly, on every push. This is NOT a substitute for a real
+    # drill against Azure Database for PostgreSQL Flexible Server's own
+    # managed backup/restore path — that still has to be run by ops against
+    # the real resource, on a schedule, with sign-off recorded. See
+    # scripts/backup-restore-drill.sh for what this does and does not prove.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: phoenix
+          POSTGRES_PASSWORD: phoenix_ci_only
+          POSTGRES_DB: phoenix_iv_ci
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: "postgresql://phoenix:phoenix_ci_only@localhost:5432/phoenix_iv_ci?schema=public"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - run: npm ci
+
+      - name: Prisma migrate (synthetic schema only)
+        run: npx prisma migrate deploy
+
+      - name: Seed synthetic test fixtures
+        run: npx ts-node prisma/seed.ts
+
+      - name: Install postgresql-client (pg_dump/psql)
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Run backup-restore drill
+        run: |
+          chmod +x scripts/backup-restore-drill.sh
+          ./scripts/backup-restore-drill.sh

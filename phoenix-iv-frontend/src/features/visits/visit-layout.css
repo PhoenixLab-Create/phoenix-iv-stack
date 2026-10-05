@@ -1,0 +1,15 @@
+.visit-layout {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  gap: var(--space-6);
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: var(--space-6) var(--space-4);
+  align-items: start;
+}
+
+@media (max-width: 760px) {
+  .visit-layout {
+    grid-template-columns: 1fr;
+  }
+}

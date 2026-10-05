@@ -1,0 +1,60 @@
+/* Design tokens — Phoenix IV Therapy Documentation
+   A clinical tool read under time pressure, sometimes by gloved hands on a
+   shared workstation. Calm and quiet by default; color is only loud where
+   loudness carries real safety meaning (a blocked step, an unacknowledged
+   flag, an adverse-event route). */
+
+:root {
+  /* Base palette */
+  --paper: #faf9f6;
+  --paper-raised: #ffffff;
+  --ink: #1c3334;
+  --ink-soft: #3f5657;
+  --sage: #4f7c72;
+  --sage-deep: #395b53;
+  --sage-tint: #e7f0ec;
+  --gold: #9a7b2f;
+  --gold-tint: #f6eed9;
+  --red: #b3261e;
+  --red-tint: #fbeceb;
+  --border: #dcd7cd;
+  --border-strong: #b7b0a2;
+  --disabled-bg: #ececea;
+  --disabled-text: #8c8880;
+
+  /* Type */
+  --font-ui: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+  --font-mono: 'IBM Plex Mono', 'SF Mono', Consolas, monospace;
+
+  --fs-xs: 0.8125rem;
+  --fs-sm: 0.9375rem;
+  --fs-base: 1rem;
+  --fs-md: 1.125rem;
+  --fs-lg: 1.375rem;
+  --fs-xl: 1.75rem;
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+
+  --focus-ring: 0 0 0 3px rgba(79, 124, 114, 0.45);
+  --focus-ring-danger: 0 0 0 3px rgba(179, 38, 30, 0.35);
+
+  color-scheme: light;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

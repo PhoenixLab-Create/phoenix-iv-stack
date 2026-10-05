@@ -1,0 +1,71 @@
+version: "3.9"
+# One-command local test stack for the Phoenix IV Therapy Documentation
+# Platform: Postgres + the NestJS backend (Sprints 1-7) + the React
+# frontend (Sprint 7). Local/dev/test only — every secret below is a
+# throwaway dev value, and only synthetic data is ever seeded.
+#
+# Usage:
+#   docker compose up --build
+#   Backend:  http://localhost:3000
+#   Frontend: http://localhost:5173
+#
+# See TESTING.md for a full walkthrough (test logins, MFA enrollment, and
+# how to exercise the full 14-step workflow against the seeded sample
+# clinical content).
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: phoenix
+      POSTGRES_PASSWORD: phoenix_dev_only
+      POSTGRES_DB: phoenix_iv_dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - phoenix_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U phoenix -d phoenix_iv_dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  backend:
+    build: ./phoenix-iv-platform
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      DATABASE_URL: "postgresql://phoenix:phoenix_dev_only@postgres:5432/phoenix_iv_dev?schema=public"
+      JWT_ACCESS_SECRET: "dev-only-change-me"
+      JWT_ACCESS_TTL: "15m"
+      JWT_REFRESH_SECRET: "dev-only-change-me-too"
+      JWT_REFRESH_TTL: "12h"
+      STAFF_IDLE_TIMEOUT_SECONDS: "900"
+      PATIENT_IDLE_TIMEOUT_SECONDS: "300"
+      MFA_ISSUER: "Phoenix Medical Aesthetics (DEV)"
+      CORS_ORIGIN: "http://localhost:5173"
+      # Set to "true" to also activate the seeded SAMPLE screening
+      # rule/protocols/consent template, so the full 14-step workflow is
+      # walkable manually without waiting on real clinic-approved content.
+      # Never set this in anything but a local/throwaway database.
+      DEV_APPROVE_SAMPLE_CONTENT: "true"
+    ports:
+      - "3000:3000"
+
+  frontend:
+    build: ./phoenix-iv-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      VITE_API_PROXY_TARGET: "http://backend:3000"
+    ports:
+      - "5173:5173"
+
+volumes:
+  phoenix_pg_data:
