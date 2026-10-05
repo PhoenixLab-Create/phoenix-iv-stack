@@ -34,6 +34,13 @@ services:
   backend:
     build: ./phoenix-iv-platform
     restart: unless-stopped
+    # The image's own CMD starts the app directly with no migrations (see
+    # that Dockerfile's comments — this is so Render's port scan doesn't
+    # time out). For local compose we want the old all-in-one behavior
+    # (wait for postgres, migrate, seed, THEN start), so override the
+    # entrypoint back to the wrapper script that does that.
+    entrypoint: ["/app/docker-entrypoint.sh"]
+    command: ["npm", "run", "start"]
     depends_on:
       postgres:
         condition: service_healthy

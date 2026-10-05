@@ -32,6 +32,11 @@ services:
     plan: free
     dockerfilePath: ./phoenix-iv-platform/Dockerfile
     dockerContext: ./phoenix-iv-platform
+    # Runs as its own step BEFORE the image's CMD starts, and does not
+    # block Render's port scan the way running this inline in the
+    # container's startup did (that caused "no open ports detected" /
+    # deploy timeout). See scripts/migrate-and-seed.sh for details.
+    preDeployCommand: ./scripts/migrate-and-seed.sh
     envVars:
       - key: NODE_ENV
         value: development
