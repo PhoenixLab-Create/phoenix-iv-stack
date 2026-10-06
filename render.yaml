@@ -1,24 +1,3 @@
-# Render Blueprint — one-click deploy of the full test stack (Postgres +
-# backend + frontend) to Render's free tier.
-#
-# This is a TEST/DEMO deployment, not a production one:
-#   - DEV_APPROVE_SAMPLE_CONTENT=true activates the seeded SAMPLE screening
-#     rule/protocols/consent template so the workflow is walkable without
-#     waiting on real clinic-approved content. Never leave this on for real
-#     patient use.
-#   - All seeded accounts/data are synthetic (see phoenix-iv-platform's
-#     prisma/seed.ts) — nothing here is a real patient.
-#   - CORS_ORIGIN is left open ("true" = reflect any origin) because the
-#     frontend's public URL isn't known until after deploy. Before any real
-#     use, pin this to the frontend's actual origin.
-#   - The frontend container runs Vite's *dev* server, not an optimized
-#     production build — fine for testing, not for real traffic.
-#   - Render's free Postgres database expires 30 days after creation. Fine
-#     for testing; not for anything you need to keep.
-#
-# To deploy: push this repo to GitHub, then in Render: New -> Blueprint,
-# point it at the repo, and click Apply.
-
 databases:
   - name: phoenix-iv-db
     plan: free
@@ -32,11 +11,6 @@ services:
     plan: free
     dockerfilePath: ./phoenix-iv-platform/Dockerfile
     dockerContext: ./phoenix-iv-platform
-    # Runs as its own step BEFORE the image's CMD starts, and does not
-    # block Render's port scan the way running this inline in the
-    # container's startup did (that caused "no open ports detected" /
-    # deploy timeout). See scripts/migrate-and-seed.sh for details.
-    preDeployCommand: ./scripts/migrate-and-seed.sh
     envVars:
       - key: NODE_ENV
         value: development
@@ -60,11 +34,6 @@ services:
         value: "Phoenix Medical Aesthetics (DEMO)"
       - key: DEV_APPROVE_SAMPLE_CONTENT
         value: "true"
-      # CORS_ORIGIN is deliberately NOT set here: main.ts falls back to
-      # `true` (reflect any request origin) when it's unset, which is what
-      # we want for this test deployment since the frontend's URL isn't
-      # known until after it deploys. Before any real use, set this to the
-      # frontend's actual origin and redeploy.
 
   - type: web
     name: phoenix-iv-frontend
