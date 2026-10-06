@@ -23,6 +23,6 @@ import { PatientSessionGuard } from './patient-session.guard';
   ],
   controllers: [AuthController],
   providers: [AuthService, JwtStrategy, MfaService, PatientSessionService, PatientSessionGuard],
-  exports: [AuthService, PatientSessionService, PatientSessionGuard],
+  exports: [AuthService, MfaService, PatientSessionService, PatientSessionGuard],
 })
 export class AuthModule {}
