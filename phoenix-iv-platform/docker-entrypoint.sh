@@ -1,4 +1,3 @@
-sh
 #!/bin/sh
 # Entrypoint: start the app immediately (so Render sees an open port),
 # and run database setup in the background with visible logs.
