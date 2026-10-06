@@ -5,8 +5,9 @@ FROM node:22-alpine
 
 WORKDIR /app
 
-# Native deps for argon2 to build on alpine.
-RUN apk add --no-cache python3 make g++
+# Native deps for argon2 to build on alpine; openssl is required by the Prisma
+# query engine (must be present BEFORE `prisma generate`).
+RUN apk add --no-cache python3 make g++ openssl
 
 COPY package.json ./
 RUN npm install
