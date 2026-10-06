@@ -25,4 +25,7 @@ RUN sed -i 's/\r$//; 1s/^\xEF\xBB\xBF//' /usr/local/bin/docker-entrypoint.sh \
 
 EXPOSE 3000
 ENTRYPOINT ["sh", "/usr/local/bin/docker-entrypoint.sh"]
-CMD ["npm", "run", "start"]
+# The compiled entry point lands at dist/main.js or dist/src/main.js depending
+# on how TypeScript infers its root folder (prisma/*.ts sits beside src/), so
+# pick whichever exists instead of hard-coding one.
+CMD ["sh", "-c", "node $(ls dist/main.js dist/src/main.js 2>/dev/null | head -n 1)"]
