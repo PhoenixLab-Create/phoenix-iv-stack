@@ -1,4 +1,3 @@
-dockerfile
 # Dev/test image - not the hardened production build. Keeps devDependencies
 # (ts-node, typescript, prisma CLI) so schema push / seed can run from inside
 # the container.
