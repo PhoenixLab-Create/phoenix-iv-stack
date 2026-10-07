@@ -5,6 +5,7 @@
  */
 import { PrismaClient } from '@prisma/client';
 import * as argon2 from 'argon2';
+import { authenticator } from 'otplib';
 
 const prisma = new PrismaClient();
 
@@ -181,7 +182,7 @@ async function main() {
 
   for (const u of testUsers) {
     const role = await prisma.role.findUniqueOrThrow({ where: { name: u.role as any } });
-    await prisma.user.upsert({
+    const created = await prisma.user.upsert({
       where: { email: u.email },
       create: {
         firstName: u.first,
@@ -190,10 +191,22 @@ async function main() {
         passwordHash,
         professionalDesignation: (u as any).designation,
         mfaEnrolled: false,
+        // Every user needs a TOTP secret from creation so the first login can
+        // hand back the authenticator-app enrollment step (matches what
+        // UsersService.create does for users made through the app).
+        mfaSecretEncrypted: authenticator.generateSecret(),
         roles: { create: [{ roleId: role.id }] },
       },
       update: {},
     });
+    // Accounts seeded by an earlier run have no secret yet - backfill it
+    // (only for users who haven't enrolled, so a working MFA is never reset).
+    if (!created.mfaSecretEncrypted && !created.mfaEnrolled) {
+      await prisma.user.update({
+        where: { id: created.id },
+        data: { mfaSecretEncrypted: authenticator.generateSecret() },
+      });
+    }
   }
 
   console.log('Seed complete (synthetic test data only).');
