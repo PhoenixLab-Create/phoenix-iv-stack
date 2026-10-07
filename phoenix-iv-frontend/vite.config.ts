@@ -1,17 +1,18 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
-// Dev server proxies /api to the NestJS backend so the browser never needs
-// a cross-origin request (and so cookies/headers behave identically to
-// production, where this is served from the same origin as the API or
-// behind a reverse proxy that does the same rewrite).
+const rawProxyTarget = process.env.VITE_API_PROXY_TARGET ?? 'http://localhost:3000';
+const proxyTarget = rawProxyTarget.includes('://') ? rawProxyTarget : `http://${rawProxyTarget}`;
+
 export default defineConfig({
   plugins: [react()],
   server: {
-    port: 5173,
+    host: true,
+    port: Number(process.env.PORT) || 5173,
+    allowedHosts: true,
     proxy: {
       '/api': {
-        target: process.env.VITE_API_PROXY_TARGET ?? 'http://localhost:3000',
+        target: proxyTarget,
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, ''),
       },
