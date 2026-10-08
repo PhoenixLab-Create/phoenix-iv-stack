@@ -28,6 +28,7 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     'monitoring.record', 'adverse_event.record', 'completion.record', 'visit.sign',
     'amendment.create', 'patient.search',
   ],
+   'patient.register',
   PRESCRIBER: ['visit.view.clinical', 'order.record', 'amendment.approve', 'patient.search'],
   ADMIN: ['patient.register', 'patient.search', 'visit.start', 'visit.view.status', 'visit.view.clinical'],
   SYSTEM_ADMIN: ['settings.manage', 'user.manage', 'audit.view', 'break_glass.use'],
