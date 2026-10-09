@@ -60,6 +60,13 @@ async function main() {
     });
   }
  
+  // Permission-only mode: used on every restart after the first seed, so role
+  // changes in this file take effect without re-creating the sample data.
+  if (process.env.SYNC_ONLY === '1') {
+    console.log('[seed] roles and permissions synced (sync-only mode)');
+    return;
+  }
+ 
   await prisma.systemSetting.upsert({
     where: { key: 'admin_clinical_visibility' },
     create: { key: 'admin_clinical_visibility', value: { mode: 'full' }, updatedBy: 'seed' },
